@@ -1,0 +1,695 @@
+
+-- List the following employee information (EmployeeID, LastName, FirstName, ManagerLastName, ManagerFirstName)
+SELECT employeeID, lastName,firstName from employees;
+db.employees.find({}, { employeeID: 1, lastName: 1, firstName: 1, managerLastName: 1, managerFirstName: 1 })
+
+
+
+
+-- What are the last names of all employees who were born in November?
+SELECT lastName FROM employees WHERE MONTH(birthDate) = 11;
+db.employees.find({ birthDate: { $regex: ".*-11-" } }, { lastName: 1 })
+
+
+
+
+-- List each employee (lastname, firstname, territory) and sort the list by territory and then by employee's last name. Remember, employees may work for more than one territory.
+ SELECT
+    e.LastName,
+    e.FirstName,
+    t.territoryDescription AS Territory
+FROM
+    employees e
+JOIN
+    employee_territories et ON e.employeeID = et.employeeID
+JOIN
+    territories t ON et.territoryID = t.territoryID
+ORDER BY
+    t.territoryDescription,
+    e.lastName;
+
+
+db.employees.aggregate([
+  {
+    $lookup: {
+      from: "employee_territories",
+      localField: "employeeID",
+      foreignField: "employeeID",
+      as: "territories"
+    }
+  },
+  {
+    $unwind: "$territories"
+  },
+  {
+    $lookup: {
+      from: "territories",
+      localField: "territories.territoryID",
+      foreignField: "territoryID",
+      as: "territory"
+    }
+  },
+  {
+    $unwind: "$territory"
+  },
+  {
+    $project: {
+      lastName: 1,
+      firstName: 1,
+      territory: "$territory.territoryDescription"
+    }
+  },
+  {
+    $sort: {
+      territory: 1,
+      lastName: 1
+    }
+  }
+])
+
+
+
+
+-- Regarding sales value, what has been our best-selling product of all time?
+SELECT
+    p.productID,
+    p.productName,
+    SUM((od.unitPrice * od.quantity * (1 - od.discount))) AS totalSales
+FROM
+    products p
+JOIN
+    order_details od ON p.productID = od.productID
+GROUP BY
+    p.productID,
+    p.productName
+ORDER BY
+    totalSales DESC
+LIMIT 1;
+
+
+
+db.order_details.aggregate([
+  {
+    $lookup: {
+      from: "products",
+      localField: "productID",
+      foreignField: "productID",
+      as: "product"
+    }
+  },
+  {
+    $unwind: "$product"
+  },
+  {
+    $group: {
+      _id: "$productID",
+      productName: { $first: "$product.productName" },
+      totalSales: { $sum: { $multiply: ["$unitPrice", "$quantity", { $subtract: [1, "$discount"] }] } }
+    }
+  },
+  {
+    $sort: {
+      totalSales: -1
+    }
+  },
+  {
+    $limit: 1
+  }
+])
+
+
+
+
+
+
+--  Regarding sales value, this only includes products that have at least been sold once, which has been our worst-selling product of all time.
+SELECT
+    p.productID,
+    p.productName,
+    COALESCE(SUM((od.unitPrice * od.quantity * (1 - od.discount))), 0) AS totalSales
+FROM
+    products p
+LEFT JOIN
+    order_details od ON p.productID = od.productID
+GROUP BY
+    p.productID,
+    p.productName
+ORDER BY
+    totalSales
+LIMIT 1;
+
+
+
+db.order_details.aggregate([
+  {
+    $lookup: {
+      from: "products",
+      localField: "productID",
+      foreignField: "productID",
+      as: "product"
+    }
+  },
+  {
+    $unwind: {
+      path: "$product",
+      preserveNullAndEmptyArrays: true
+    }
+  },
+  {
+    $group: {
+      _id: "$productID",
+      productName: { $first: "$product.productName" },
+      totalSales: { $sum: { $multiply: ["$unitPrice", "$quantity", { $subtract: [1, "$discount"] }] } }
+    }
+  },
+  {
+    $sort: {
+      totalSales: 1
+    }
+  },
+  {
+    $limit: 1
+  }
+])
+
+
+
+
+
+
+
+
+-- Regarding sales value, which month has been traditionally best for sales?
+SELECT
+    MONTH(orderDate) AS salesMonth,
+    SUM(freight) AS totalSales
+FROM
+    orders
+GROUP BY
+    salesMonth
+ORDER BY
+    totalSales DESC
+LIMIT 1;
+
+
+db.orders.aggregate([
+  {
+    $group: {
+      _id: { $month: "$orderDate" },
+      salesMonth: { $first: { $month: "$orderDate" } },
+      totalSales: { $sum: "$freight" }
+    }
+  },
+  {
+    $sort: {
+      totalSales: -1
+    }
+  },
+  {
+    $limit: 1
+  }
+])
+
+
+
+
+
+-- Product report (productID, ProductName, SupplierName, ProductCategory). Order the list by product category.
+SELECT
+    p.productID,
+    p.productName,
+    s.companyName AS supplierName,
+    c.categoryName AS productCategory
+FROM
+    products p
+JOIN
+    suppliers s ON p.supplierID = s.supplierID
+JOIN
+    categories c ON p.categoryID = c.categoryID
+ORDER BY
+    c.categoryName;
+
+ 
+
+db.products.aggregate([
+  {
+    $lookup: {
+      from: "suppliers",
+      localField: "supplierID",
+      foreignField: "supplierID",
+      as: "supplier"
+    }
+  },
+  {
+    $lookup: {
+      from: "categories",
+      localField: "categoryID",
+      foreignField: "categoryID",
+      as: "category"
+    }
+  },
+  {
+    $unwind: "$supplier"
+  },
+  {
+    $unwind: "$category"
+  },
+  {
+    $project: {
+      productID: 1,
+      productName: 1,
+      supplierName: "$supplier.companyName",
+      productCategory: "$category.categoryName"
+    }
+  },
+  {
+    $sort: {
+      productCategory: 1
+    }
+  }
+])
+
+
+
+
+
+
+
+
+
+
+-- Produce a count of the employees by each sales region.
+SELECT
+    r.regionDescription AS salesRegion,
+    COUNT(DISTINCT e.employeeID) AS employeeCount
+FROM
+    employees e
+JOIN
+    employee_territories et ON e.employeeID = et.employeeID
+JOIN
+    territories t ON et.territoryID = t.territoryID
+JOIN
+    regions r ON t.regionID = r.regionID
+GROUP BY
+    salesRegion;
+
+ 
+db.employees.aggregate([
+  {
+    $lookup: {
+      from: "employee_territories",
+      localField: "employeeID",
+      foreignField: "employeeID",
+      as: "territories"
+    }
+  },
+  {
+    $unwind: "$territories"
+  },
+  {
+    $lookup: {
+      from: "territories",
+      localField: "territories.territoryID",
+      foreignField: "territoryID",
+      as: "territory"
+    }
+  },
+  {
+    $unwind: "$territory"
+  },
+  {
+    $lookup: {
+      from: "regions",
+      localField: "territory.regionID",
+      foreignField: "regionID",
+      as: "region"
+    }
+  },
+  {
+    $unwind: "$region"
+  },
+  {
+    $group: {
+      _id: "$region.regionDescription",
+      employeeCount: { $sum: 1 }
+    }
+  }
+])
+
+
+
+
+
+
+
+-- List the dollar values for sales by region.
+SELECT
+    r.regionDescription AS salesRegion,
+    SUM(od.unitPrice * od.quantity) AS salesValue
+FROM
+    orders o
+JOIN
+    order_details od ON o.orderID = od.orderID
+JOIN
+    employees e ON o.employeeID = e.employeeID
+JOIN
+    employee_territories et ON e.employeeID = et.employeeID
+JOIN
+    territories t ON et.territoryID = t.territoryID
+JOIN
+    regions r ON t.regionID = r.regionID
+GROUP BY
+    salesRegion;
+
+
+
+db.orders.aggregate([
+  {
+    $lookup: {
+      from: "order_details",
+      localField: "orderID",
+      foreignField: "orderID",
+      as: "orderDetails"
+    }
+  },
+  {
+    $unwind: "$orderDetails"
+  },
+  {
+    $lookup: {
+      from: "employees",
+      localField: "employeeID",
+      foreignField: "employeeID",
+      as: "employee"
+    }
+  },
+  {
+    $unwind: "$employee"
+  },
+  {
+    $lookup: {
+      from: "employee_territories",
+      localField: "employee.employeeID",
+      foreignField: "employeeID",
+      as: "employeeTerritories"
+    }
+  },
+  {
+    $unwind: "$employeeTerritories"
+  },
+  {
+    $lookup: {
+      from: "territories",
+      localField: "employeeTerritories.territoryID",
+      foreignField: "territoryID",
+      as: "territory"
+    }
+  },
+  {
+    $unwind: "$territory"
+  },
+  {
+    $lookup: {
+      from: "regions",
+      localField: "territory.regionID",
+      foreignField: "regionID",
+      as: "region"
+    }
+  },
+  {
+    $unwind: "$region"
+  },
+  {
+    $group: {
+      _id: "$region.regionDescription",
+      salesValue: { $sum: { $multiply: ["$orderDetails.unitPrice", "$orderDetails.quantity"] } }
+    }
+  }
+])
+
+
+
+
+
+
+
+
+
+-- What is the average value of a sales order?
+SELECT
+    AVG(od.unitPrice * od.quantity) AS averageOrderValue
+FROM
+    order_details od;
+ 
+
+db.order_details.aggregate([
+  {
+    $group: {
+      _id: null,
+      averageOrderValue: { $avg: { $multiply: ["$unitPrice", "$quantity"] } }
+    }
+  }
+])
+
+
+
+
+
+-- List orders (OrderID, OrderDate, Customer Name) where the total order value exceeds a sales order's average value 
+
+SELECT
+    o.orderID,
+    o.orderDate,
+    CONCAT(c.contactName, ' (', c.customerID, ')') AS customerName
+FROM
+    orders o
+JOIN
+    customers c ON o.customerID = c.customerID
+JOIN
+    (
+        SELECT
+            orderID,
+            SUM(unitPrice * quantity) AS orderTotal
+        FROM
+            order_details
+        GROUP BY
+            orderID
+    ) od ON o.orderID = od.orderID
+WHERE
+    od.orderTotal > (
+        SELECT
+            AVG(unitPrice * quantity)
+        FROM
+            order_details
+    );
+
+
+
+db.orders.aggregate([
+  {
+    $lookup: {
+      from: "order_details",
+      localField: "orderID",
+      foreignField: "orderID",
+      as: "orderDetails"
+    }
+  },
+  {
+    $unwind: "$orderDetails"
+  },
+  {
+    $group: {
+      _id: "$orderID",
+      orderDate: { $first: "$orderDate" },
+      customerName: { $first: "$customerName" },
+      orderTotal: { $sum: { $multiply: ["$orderDetails.unitPrice", "$orderDetails.quantity"] } }
+    }
+  },
+  {
+    $lookup: {
+      from: "order_details",
+      localField: "_id",
+      foreignField: "orderID",
+      as: "orderDetails"
+    }
+  },
+  {
+    $unwind: "$orderDetails"
+  },
+  {
+    $group: {
+      _id: null,
+      averageOrderValue: { $avg: { $multiply: ["$orderDetails.unitPrice", "$orderDetails.quantity"] } },
+      orders: { $push: "$$ROOT" }
+    }
+  },
+  {
+    $unwind: "$orders"
+  },
+  {
+    $match: {
+      "orders.orderTotal": { $gt: "$averageOrderValue" }
+    }
+  },
+  {
+    $project: {
+      _id: "$orders._id",
+      orderDate: "$orders.orderDate",
+      customerName: "$orders.customerName"
+    }
+  }
+])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- Produce a customer report (must also include those we have not yet done business with) showing CustomerID, Customer name, and total sales made to that customer.
+SELECT
+    c.customerID,
+    c.companyName AS customerName,
+    IFNULL(SUM(od.unitPrice * od.quantity), 0) AS totalSales
+FROM
+    customers c
+LEFT JOIN
+    orders o ON c.customerID = o.customerID
+LEFT JOIN
+    order_details od ON o.orderID = od.orderID
+GROUP BY
+    c.customerID,
+    c.companyName;
+ 
+
+
+db.customers.aggregate([
+  {
+    $lookup: {
+      from: "orders",
+      localField: "customerID",
+      foreignField: "customerID",
+      as: "orders"
+    }
+  },
+  {
+    $unwind: "$orders"
+  },
+  {
+    $lookup: {
+      from: "order_details",
+      localField: "orders.orderID",
+      foreignField: "orderID",
+      as: "orderDetails"
+    }
+  },
+  {
+    $unwind: "$orderDetails"
+  },
+  {
+    $group: {
+      _id: "$customerID",
+      customerName: { $first: "$companyName" },
+      totalSales: { $sum: { $multiply: ["$orderDetails.unitPrice", "$orderDetails.quantity"] } }
+    }
+  }
+])
+
+
+
+
+
+
+
+
+
+-- What is the name of our best salesperson? 
+SELECT
+    CONCAT(e.firstName, ' ', e.lastName) AS salespersonName,
+    SUM(od.unitPrice * od.quantity) AS totalSales
+FROM
+    employees e
+JOIN
+    orders o ON e.employeeID = o.employeeID
+JOIN
+    order_details od ON o.orderID = od.orderID
+GROUP BY
+    salespersonName
+ORDER BY
+    totalSales DESC
+LIMIT 1;
+
+
+
+db.employees.aggregate([
+  {
+    $lookup: {
+      from: "orders",
+      localField: "employeeID",
+      foreignField: "employeeID",
+      as: "orders"
+    }
+  },
+  {
+    $unwind: "$orders"
+  },
+  {
+    $lookup: {
+      from: "order_details",
+      localField: "orders.orderID",
+      foreignField: "orderID",
+      as: "orderDetails"
+    }
+  },
+  {
+    $unwind: "$orderDetails"
+  },
+  {
+    $group: {
+      _id: "$employeeID",
+      employeeName: { $first: { $concat: ["$firstName", " ", "$lastName"] } },
+      totalSales: { $sum: { $multiply: ["$orderDetails.unitPrice", "$orderDetails.quantity"] } }
+    }
+  },
+  {
+    $sort: {
+      totalSales: -1
+    }
+  },
+  {
+    $limit: 1
+  }
+])
+
+
+
+
+-- List all products that need to be re-ordered. Do not include discontinued products in this report. 
+SELECT
+    p.productID,
+    p.productName,
+    p.unitsInStock,
+    p.reorderLevel
+FROM
+    products p
+WHERE
+    p.unitsInStock <= p.reorderLevel
+    AND p.discontinued = 0;
+
+
+db.products.find({
+  unitsInStock: { $lte: reorderLevel },
+  discontinued: { $ne: true }
+})
+
+
+
+
+
